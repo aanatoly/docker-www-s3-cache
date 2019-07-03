@@ -1,0 +1,65 @@
+proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=the_zone:10m inactive={{ NGINX_EXPIRE_TOUT }} max_size={{ NGINX_CACHE_SIZE }};
+
+lua_package_path "/usr/local/openresty/lib/lua/?.lua;;";
+
+server {
+    listen 80;
+
+    # Re-resolve s3.amazonaws.com so that we aren't always
+    # using the same IP address.
+    resolver 8.8.8.8 valid=60s;
+    resolver_timeout 10s;
+
+    location / {
+        # Only allow GET and HEAD requests.
+        limit_except GET HEAD {
+            deny all;
+        }
+        proxy_cache the_zone;
+        proxy_cache_valid any {{ NGINX_EXPIRE_TOUT }};
+        proxy_cache_key $request_method$proxy_host$request_uri;
+        add_header X-Cached $upstream_cache_status;
+        proxy_pass $scheme://$host$request_uri;
+        # expires 5d;
+    }
+}
+
+server {
+    listen 80;
+    server_name www.s3;
+
+    # Re-resolve s3.amazonaws.com so that we aren't always
+    # using the same IP address.
+    resolver 8.8.8.8 valid=60s;
+    resolver_timeout 10s;
+
+    set $aws_access "{{ AWS_ACCESS_KEY_ID }}";
+    set $aws_secret "{{ AWS_SECRET_ACCESS_KEY }}";
+
+    location ~* ^/([^/]*)/(.*) {
+        set $bucket           "$1";
+        set $url_full         "$2";
+        set_by_lua $now       "return ngx.cookie_time(ngx.time())";
+        set $string_to_sign   "$request_method\n\n\n\nx-amz-date:${now}\n/$bucket/$url_full";
+        set_hmac_sha1          $aws_signature $aws_secret $string_to_sign;
+        set_encode_base64      $aws_signature $aws_signature;
+
+        proxy_http_version     1.1;
+        proxy_set_header       Host $bucket.s3.amazonaws.com;
+        proxy_set_header       x-amz-date $now;
+        proxy_set_header       Authorization "AWS $aws_access:$aws_signature";
+        proxy_intercept_errors on;
+
+        rewrite .* /$url_full break;
+
+        proxy_pass             http://$bucket.s3.amazonaws.com;
+
+        proxy_cache_convert_head off;
+        proxy_cache_key $request_method$proxy_host$request_uri;
+        proxy_buffering on;
+        proxy_cache the_zone;
+        proxy_cache_valid 200 302 {{ NGINX_EXPIRE_TOUT }};
+        add_header X-Cached $upstream_cache_status;
+        # expires 20d;
+    }
+}

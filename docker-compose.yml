@@ -1,0 +1,17 @@
+version: '3.2'
+
+services:
+  ubuntu-dev:
+    image: ${IMAGE_REPO}:${IMAGE_TAG}
+    ports:
+      - "8082:80"
+    environment:
+      - AWS_SECRET_ACCESS_KEY
+      - AWS_ACCESS_KEY_ID
+      - NGINX_CACHE_SIZE=20g
+      - NGINX_EXPIRE_TOUT=20d
+    build:
+      context: .
+
+      labels:
+        Commit: ${CI_COMMIT_DESC}
